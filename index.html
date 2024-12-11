@@ -1,1 +1,306 @@
-<html></html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Travel Map</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Sortable/1.14.0/Sortable.min.js"></script>
+    <!-- Include Leaflet Image Plugin -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-image@0.5.1/dist/leaflet-image.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/0.4.2/html2canvas.min.js"></script>
+
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            height: 100%;
+        }
+        #map {
+            height: 100%;
+            width: 100%;
+        }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 1000;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            width: 250px;
+        }
+        #city-input-container {
+            position: relative;
+        }
+        #city-input {
+            width: 100%;
+            padding: 5px;
+        }
+        #autocomplete {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            width: 100%;
+            background: white;
+            border: 1px solid #ccc;
+            max-height: 150px;
+            overflow-y: auto;
+            z-index: 1000;
+        }
+        #autocomplete div {
+            padding: 8px;
+            cursor: pointer;
+        }
+        #autocomplete div:hover {
+            background: #eee;
+        }
+        #city-list {
+            list-style-type: none;
+            padding: 0;
+            margin: 10px 0;
+            overflow-y: auto;
+            max-height: 200px;
+        }
+        #city-list li {
+            margin: 5px 0;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: grab;
+        }
+        #city-list li:active {
+            cursor: grabbing;
+        }
+        .remove-button, .up-button, .down-button {
+            background: red;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 2px 8px;
+            cursor: pointer;
+        }
+        .up-button {
+            background: green;
+        }
+        .down-button {
+            background: blue;
+        }
+        #toggle-panel {
+            position: absolute;
+            bottom: 10px;
+            right: 10px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        .collapsed #controls {
+            display: none;
+        }
+        #export-button {
+            margin-top: 10px;
+            background-color: #28a745;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    <div id="controls">
+        <div id="city-input-container">
+            <input type="text" id="city-input" placeholder="Type a city name..." />
+            <div id="autocomplete"></div>
+        </div>
+        <button id="add-city-button">Add</button>
+        <ul id="city-list"></ul>
+        <button id="export-button">Export Map as Image</button> <!-- Export Button -->
+    </div>
+    <button id="toggle-panel">Collapse Panel</button>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script>
+        var map = L.map('map').setView([20, -30], 3); // Initialize map with global view
+
+        // Add base map tiles
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+            attribution: '© OpenStreetMap contributors & CARTO',
+            subdomains: 'abcd',
+            maxZoom: 20
+        }).addTo(map);
+
+        var markers = {}; // Store city markers with city names as keys
+        var cityList = document.getElementById('city-list'); // Editable city list container
+        var cityInput = document.getElementById('city-input'); // Input field for city search
+        var autocomplete = document.getElementById('autocomplete'); // Autocomplete dropdown
+        var addCityButton = document.getElementById('add-city-button'); // "Add" button
+        var togglePanelButton = document.getElementById('toggle-panel'); // Collapse button
+        var exportButton = document.getElementById('export-button'); // Export button
+        var cityCoordinates = []; // Array to store city coordinates for drawing the line
+        var polyline; // Variable to store the polyline
+
+        // Fetch city suggestions and display autocomplete
+        cityInput.addEventListener('input', function () {
+            var query = cityInput.value.trim();
+            if (!query) {
+                autocomplete.innerHTML = ''; // Clear suggestions if input is empty
+                return;
+            }
+            fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1`)
+                .then(response => response.json())
+                .then(data => {
+                    autocomplete.innerHTML = ''; // Clear previous suggestions
+                    data.slice(0, 5).forEach(city => {
+                        var suggestion = document.createElement('div');
+                        suggestion.textContent = city.display_name;
+                        suggestion.addEventListener('click', function () {
+                            cityInput.value = city.display_name; // Set selected suggestion to input
+                            autocomplete.innerHTML = ''; // Clear suggestions
+                            addCity(city.display_name, parseFloat(city.lat), parseFloat(city.lon));
+                        });
+                        autocomplete.appendChild(suggestion);
+                    });
+                });
+        });
+
+        // Function to add a city marker and list entry
+        function addCity(cityName, lat, lon) {
+            if (markers[cityName]) return; // Avoid duplicates
+
+            var marker = L.marker([lat, lon]).addTo(map).bindPopup(cityName);
+
+            // Store marker in the markers object
+            markers[cityName] = marker;
+
+            // Add coordinates to cityCoordinates array
+            cityCoordinates.push([lat, lon]);
+
+            // Redraw the polyline
+            redrawPolyline();
+
+            // Add city to the list with "Up" and "Down" buttons
+            var listItem = document.createElement('li');
+            listItem.textContent = cityName;
+
+            var removeButton = document.createElement('button');
+            removeButton.textContent = 'Remove';
+            removeButton.className = 'remove-button';
+            removeButton.addEventListener('click', function () {
+                // Remove marker from map and list
+                map.removeLayer(marker);
+                delete markers[cityName];
+                cityList.removeChild(listItem);
+
+                // Remove city coordinates and redraw the polyline
+                cityCoordinates = cityCoordinates.filter(function (coords) {
+                    return coords[0] !== lat || coords[1] !== lon;
+                });
+
+                // Redraw the polyline after removal
+                redrawPolyline();
+            });
+
+            var upButton = document.createElement('button');
+            upButton.textContent = 'Up';
+            upButton.className = 'up-button';
+            upButton.addEventListener('click', function () {
+                var index = Array.from(cityList.children).indexOf(listItem);
+                if (index > 0) {
+                    cityList.insertBefore(listItem, cityList.children[index - 1]);
+                    cityCoordinates.splice(index - 1, 0, cityCoordinates.splice(index, 1)[0]); // Reorder coordinates
+                    redrawPolyline();
+                }
+            });
+
+            var downButton = document.createElement('button');
+            downButton.textContent = 'Down';
+            downButton.className = 'down-button';
+            downButton.addEventListener('click', function () {
+                var index = Array.from(cityList.children).indexOf(listItem);
+                if (index < cityList.children.length - 1) {
+                    cityList.insertBefore(listItem, cityList.children[index + 2] || null);
+                    cityCoordinates.splice(index + 1, 0, cityCoordinates.splice(index, 1)[0]); // Reorder coordinates
+                    redrawPolyline();
+                }
+            });
+
+            listItem.appendChild(upButton);
+            listItem.appendChild(downButton);
+            listItem.appendChild(removeButton);
+            cityList.appendChild(listItem);
+        }
+
+        // Redraw polyline to connect all city markers
+        function redrawPolyline() {
+            if (polyline) {
+                map.removeLayer(polyline); // Remove previous polyline
+            }
+            if (cityCoordinates.length > 1) {
+                polyline = L.polyline(cityCoordinates, { color: 'red' }).addTo(map);
+            }
+        }
+
+        // Export map as image using leaflet-image
+       // Export map as image using leaflet-image
+exportButton.addEventListener('click', function () {
+    // Check if leafletImage is defined
+    if (typeof leafletImage !== "function") {
+        console.error("leafletImage plugin not loaded properly!");
+        alert("Export functionality not available. Please check the leafletImage plugin.");
+        return;
+    }
+
+    // Use leafletImage to export the map
+    leafletImage(map, function (err, canvas) {
+        if (err) {
+            console.error("Error exporting map:", err);
+            alert("Failed to export the map. See console for details.");
+            return;
+        }
+        
+        // Create an image download link
+        var link = document.createElement('a');
+        link.href = canvas.toDataURL("image/png");
+        link.download = 'map_image.png';
+        link.click();
+    });
+});
+
+        // Toggle control panel visibility
+        togglePanelButton.addEventListener('click', function () {
+            document.body.classList.toggle('collapsed');
+        });
+
+        // Add event listener to the "Add" button
+addCityButton.addEventListener('click', function() {
+  var cityName = cityInput.value.trim(); 
+  
+  // You'll need to get the latitude and longitude for the city here.
+  // You could use the same Nominatim API call as in the autocomplete 
+  // to fetch the coordinates based on the city name.
+
+  // Example using Nominatim API (replace with your actual logic):
+  fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(cityName)}&format=json&addressdetails=1`)
+    .then(response => response.json())
+    .then(data => {
+      if (data.length > 0) {
+        var city = data[0]; // Get the first result
+        addCity(city.display_name, parseFloat(city.lat), parseFloat(city.lon));
+        cityInput.value = ''; // Clear the input field
+      } else {
+        alert("City not found!"); 
+      }
+    });
+});
+    </script>
+</body>
+</html>
+
